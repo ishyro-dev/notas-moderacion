@@ -25,11 +25,22 @@
   button:disabled{opacity:.6;cursor:wait}
   .pie{margin-top:18px;font-size:12.5px;color:#80848E}
   .cargando{color:#B5BAC1;font-size:15px}
+  :root{--ac:#5865F2}
+  .logo,button{background:var(--ac)!important} button:hover{filter:brightness(.9)} input[type=text]:focus{box-shadow:0 0 0 2px var(--ac)}
+  .rec input{accent-color:var(--ac)}
+  html.claro body{background:#F2F3F5} html.claro .tarjeta{background:#fff;box-shadow:0 8px 40px rgba(0,0,0,.12)}
+  html.claro h1{color:#060607} html.claro p,html.claro label,html.claro .rec,html.claro .cargando{color:#4E5058}
+  html.claro input[type=text]{background:#EBEDEF;color:#060607}
   .agitar{animation:ag .35s}
   @keyframes ag{20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
 </style>
 </head>
 <body>
+<script>
+try { var ap = JSON.parse(localStorage.getItem('nm.apariencia') || '{}');
+  if (ap.color) document.documentElement.style.setProperty('--ac', ap.color);
+  if (ap.tema === 'claro') document.documentElement.className = 'claro'; } catch (e) {}
+</script>
 <div class="cargando" id="cargando">Cargando...</div>
 <form class="tarjeta" id="f" autocomplete="off" hidden>
   <div class="logo">NM</div>
@@ -69,7 +80,7 @@
   }
   function iniciar() {
     api('inicio').then(function (d) {
-      window.__NM = { yo: d.yo, config: d.config, prefs: d.prefs, api: api, salir: salir };
+      window.__NM = { yo: d.yo, config: d.config, prefs: d.prefs, avisos: d.avisos, api: api, salir: salir };
       window.__NM_DEF = d.app.def;
       document.getElementById('estilo-acceso').remove();
       var st = document.createElement('style'); st.textContent = d.app.css; document.head.appendChild(st);

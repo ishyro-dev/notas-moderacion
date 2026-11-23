@@ -10,6 +10,9 @@ const P = 'nm:';
 const SESION_SEG = 60 * 60 * 24 * 30;   // 30 días
 const MAX_NOTAS = 5000;
 const ALF = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+const MAX_NOTIFS = 100;
+// Plantillas que venían de serie en versiones anteriores (se retiran una sola vez).
+const PLANTILLAS_RETIRADAS = ["Hacks - usuario salió del servidor", "Posible uso de programas externos", "Uso de programas externos", "Usuario menor de 13 años", "Uso de cuenta alternativa", "Enviado a verificación", "Arruinar la experiencia de juego", "Hablar fuera de partida", "Varios usuarios en partida", "Faltas de respeto"];
 
 // ------------------------------------------------------------------ Redis
 async function redis(...cmd) {
@@ -47,6 +50,24 @@ async function inicializar() {
     const s = { id: 'admin', nombre: ADMIN_NOMBRE, admin: true, hash: ADMIN_HASH, creado: hoy(), final: '' };
     await pipe([['HSET', P + 'staff', s.id, JSON.stringify(s)], ['SET', P + 'codigo:' + ADMIN_HASH, s.id]]);
   }
+}
+
+async function notificar(tipo, texto, por) {
+  const n = { id: nuevoId(), tipo, texto, por: por || '', fecha: hoy() };
+  await pipe([['LPUSH', P + 'notifs', JSON.stringify(n)], ['LTRIM', P + 'notifs', 0, MAX_NOTIFS - 1]]);
+}
+async function leerNotifs(id) {
+  const [lista, leido] = await pipe([['LRANGE', P + 'notifs', 0, 29], ['GET', P + 'leido:' + id]]);
+  const notifs = (lista || []).map(json).filter(Boolean);
+  return { notifs, leido: leido || '', nuevas: notifs.filter(n => !leido || n.fecha > leido).length };
+}
+async function migrar() {
+  // v3: se quitan las plantillas de serie (solo queda "Nota libre" + las creadas por el equipo).
+  if (await redis('SET', P + 'mig:solo-nota-libre', '1', 'NX') !== 'OK') return;
+  const c = json(await redis('GET', P + 'config'));
+  if (!c || !Array.isArray(c.plantillas)) return;
+  c.plantillas = c.plantillas.filter(p => !PLANTILLAS_RETIRADAS.includes(p.nombre));
+  await redis('SET', P + 'config', JSON.stringify(c));
 }
 
 async function usuario(req) {
@@ -90,8 +111,20 @@ const acciones = {
 
   async inicio(req) {
     const u = await usuario(req);
+    await migrar();
     const [config, prefs] = await pipe([['GET', P + 'config'], ['GET', P + 'prefs:' + u.id]]);
-    return { app: APP, yo: publico(u), config: json(config), prefs: json(prefs) };
+    return { app: APP, yo: publico(u), config: json(config), prefs: json(prefs), avisos: await leerNotifs(u.id) };
+  },
+
+  async notifs(req) {
+    const u = await usuario(req);
+    return leerNotifs(u.id);
+  },
+
+  async leerNotifs(req) {
+    const u = await usuario(req);
+    await redis('SET', P + 'leido:' + u.id, hoy());
+    return { ok: true };
   },
 
   async salir(req) {
@@ -158,7 +191,8 @@ const acciones = {
     if (!nombre) throw new Err(400, 'Falta el nombre');
     const codigo = nuevoCodigo();
     const s = { id: nuevoId(), nombre, admin: !!b.admin, hash: hashCodigo(codigo), creado: hoy(), final: codigo.slice(-4), por: u.nombre };
-    await pipe([['HSET', P + 'staff', s.id, JSON.stringify(s)], ['SET', P + 'codigo:' + s.hash, s.id]]);
+    await pipe([['HSET', P + 'staff', s.id, JSON.stringify(s)], ['SET', P + 'codigo:' + s.hash, s.id], ['SET', P + 'leido:' + s.id, hoy()]]);
+    await notificar('miembro', s.nombre + ' se ha unido al equipo' + (s.admin ? ' como administrador' : ''), u.nombre);
     return { codigo, miembro: publico(s) };
   },
 

@@ -76,11 +76,11 @@
       reglas: DEF.reglas.slice(),
       reglamento: DEF.reglamento,
       perfil: { nombre: SES ? SES.yo.nombre : 'Moderador', rol: '', color: '#5865F2' },
-      formatoActual: null, zoomEditor: 100, zoomVista: 100, zoomRegl: 100, mencion: true, columna: 0.5
+      formatoActual: null, zoomEditor: 100, zoomVista: 100, zoomRegl: 100, mencion: true, columna: 0.5, tema: 'oscuro', bienvenidaVista: false
     };
   }
   var CLAVES_CONFIG = ['plantillas', 'formatos', 'reglas', 'reglamento'];
-  var CLAVES_PREFS = ['perfil', 'formatoActual', 'zoomEditor', 'zoomVista', 'zoomRegl', 'mencion', 'columna'];
+  var CLAVES_PREFS = ['perfil', 'formatoActual', 'zoomEditor', 'zoomVista', 'zoomRegl', 'mencion', 'columna', 'tema', 'bienvenidaVista'];
   function sub(o, claves) { var r = {}; claves.forEach(function (k) { r[k] = o[k]; }); return r; }
   var D = porDefecto();
   if (SES && SES.config) CLAVES_CONFIG.forEach(function (k) { if (SES.config[k] != null) D[k] = SES.config[k]; });
@@ -103,6 +103,27 @@
     }, inmediato ? 0 : 700);
   }
   if (SES && ADMIN && !SES.config) guardar(true);   // primera vez: sube las plantillas originales
+
+  // ================================================================ apariencia
+  function hexRgb(x) { x = String(x || '#5865F2').replace('#', ''); if (x.length === 3) x = x.split('').map(function (c) { return c + c; }).join(''); var n = parseInt(x, 16) || 0x5865F2; return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+  function mezclar(c, o, t) { return c.map(function (v, i) { return Math.round(v + (o[i] - v) * t); }); }
+  function rgbHex(c) { return '#' + c.map(function (v) { return ('0' + v.toString(16)).slice(-2); }).join(''); }
+  function luminancia(c) { var a = c.map(function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2]; }
+  var mqClaro = window.matchMedia ? matchMedia('(prefers-color-scheme: light)') : null;
+  function temaEfectivo() { var t = D.tema || 'oscuro'; return t === 'sistema' ? (mqClaro && mqClaro.matches ? 'claro' : 'oscuro') : t; }
+  /** Aplica el tema (claro/oscuro) y el color de acento del perfil a toda la interfaz. */
+  function aplicarApariencia() {
+    var raiz = document.documentElement, claro = temaEfectivo() === 'claro', c = hexRgb(D.perfil.color);
+    raiz.setAttribute('data-tema', claro ? 'claro' : 'oscuro');
+    raiz.style.setProperty('--blurple', rgbHex(c));
+    raiz.style.setProperty('--blurple-h', rgbHex(mezclar(c, [0, 0, 0], 0.18)));
+    raiz.style.setProperty('--sobre-acento', luminancia(c) > 0.42 ? '#111214' : '#ffffff');
+    raiz.style.setProperty('--men-bg', 'rgba(' + c.join(',') + ',' + (claro ? 0.15 : 0.3) + ')');
+    raiz.style.setProperty('--acento-suave', 'rgba(' + c.join(',') + ',' + (claro ? 0.10 : 0.15) + ')');
+    raiz.style.setProperty('--men-tx', claro ? rgbHex(mezclar(c, [0, 0, 0], 0.4)) : rgbHex(mezclar(c, [255, 255, 255], 0.6)));
+    try { localStorage.setItem('nm.apariencia', JSON.stringify({ tema: temaEfectivo(), color: D.perfil.color })); } catch (e) {}
+  }
+  if (mqClaro && mqClaro.addEventListener) mqClaro.addEventListener('change', function () { if (D.tema === 'sistema') aplicarApariencia(); });
 
   function reglas() { return D.reglas.map(M.parseRegla).filter(Boolean); }
   function formatoActual() {
@@ -148,9 +169,12 @@
         ui.scrollForm),
       ui.divider = h('div', { class: 'divider', title: 'Arrastra para cambiar el ancho' }),
       h('section', { class: 'pane prev' },
-        h('div', { class: 'pane-head' }, h('span', null, h('span', { class: 'lbl', style: { display: 'inline' }, text: 'Vista previa' }), h('span', { class: 'sub', text: '  ·  así se verá en Discord' })), ui.zVista),
+        h('div', { class: 'pane-head' }, h('span', { class: 'lbl', style: { display: 'inline' }, text: 'Vista previa' }),
+          h('div', { class: 'row', style: { gap: '6px' } }, ui.selFormato = h('select', { class: 'in', title: 'Formato de la nota: cómo se ordena y presenta el texto', style: { width: 'auto', maxWidth: '165px', padding: '5px 28px 5px 8px', fontSize: '13px' }, onchange: function () {
+            D.formatoActual = ui.selFormato.value; guardar(); pintarFormulario(); refrescar();
+          } }), ADMIN ? h('button', { class: 'icono', title: 'Organizar formatos', html: '&#9998;', onclick: organizarFormatos }) : null, ui.zVista)),
         ui.scrollVista,
-        h('div', { class: 'barra-copiar' }, ui.aviso,
+        h('div', { class: 'barra-copiar' }, ui.faltan = h('div', { class: 'faltan' }), ui.aviso,
           h('div', { class: 'entrada' }, h('span', { class: 'ayuda', text: CTRL + '+Enter para copiar' }), ui.contador,
             h('button', { class: 'btn', style: { padding: '9px 22px' }, text: 'Copiar nota', onclick: copiar })))));
     divisor();
@@ -163,12 +187,16 @@
       h('aside', { class: 'sidebar' }, h('div', { class: 'side-head', text: 'Notas de Moderación' }), ui.canales, ui.userbar),
       h('main', null,
         h('div', { class: 'topbar' }, h('span', { class: 'h', text: '#' }), ui.topT, h('span', { class: 'vsep' }), ui.topD,
+          ui.campana = h('button', { class: 'campana', title: 'Notificaciones', html: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-1.7 1.7A1 1 0 0 0 4 19.4h16a1 1 0 0 0 .7-1.7L19 16Z"/></svg>', onclick: abrirAvisos }),
           h('button', { class: 'btn sec peq', text: 'Nueva nota', title: 'Vacía el formulario (Alt+N)', onclick: nuevaNota }),
           ADMIN ? h('button', { class: 'btn sec peq', text: 'Editar plantilla', onclick: function () { editorPlantillas(false); } }) : null),
         ui.split)
     ]);
+    aplicarApariencia();
     pintarUsuario();
     pintarCanales();
+    pintarSelFormato();
+    pintarCampana();
     aplicarZoom();
     document.addEventListener('keydown', function (e) {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); copiar(); }
@@ -219,7 +247,10 @@
     agregar(ui.userbar, [avatar(p.nombre, p.color, 32),
       h('div', { class: 'nombres' }, h('div', { class: 'n', text: p.nombre || 'Moderador' }),
         h('div', { class: 'r', text: p.rol || (ADMIN ? 'Administrador' : 'Staff') })),
-      h('button', { class: 'icono', title: 'Perfil', html: '&#9881;', onclick: editarPerfil }),
+      h('button', { class: 'icono', title: temaEfectivo() === 'claro' ? 'Cambiar a modo oscuro' : 'Cambiar a modo claro', html: temaEfectivo() === 'claro' ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M20.7 14.6A8.5 8.5 0 0 1 9.4 3.3a.75.75 0 0 0-1-.92A10 10 0 1 0 21.6 15.6a.75.75 0 0 0-.9-1Z"/></svg>' : '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0-5a1 1 0 0 1 1 1v1.5a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1Zm0 17.5a1 1 0 0 1 1 1V22a1 1 0 1 1-2 0v-1.5a1 1 0 0 1 1-1ZM22 12a1 1 0 0 1-1 1h-1.5a1 1 0 1 1 0-2H21a1 1 0 0 1 1 1ZM4.5 12a1 1 0 0 1-1 1H2a1 1 0 1 1 0-2h1.5a1 1 0 0 1 1 1Zm14.57-7.07a1 1 0 0 1 0 1.41l-1.06 1.06a1 1 0 1 1-1.41-1.41l1.06-1.06a1 1 0 0 1 1.41 0ZM7.4 16.6a1 1 0 0 1 0 1.41l-1.06 1.06a1 1 0 1 1-1.41-1.41l1.06-1.06a1 1 0 0 1 1.41 0Zm11.67 2.47a1 1 0 0 1-1.41 0l-1.06-1.06a1 1 0 1 1 1.41-1.41l1.06 1.06a1 1 0 0 1 0 1.41ZM7.4 7.4a1 1 0 0 1-1.41 0L4.93 6.34a1 1 0 0 1 1.41-1.41L7.4 5.99a1 1 0 0 1 0 1.41Z"/></svg>', onclick: function () {
+        D.tema = temaEfectivo() === 'claro' ? 'oscuro' : 'claro'; guardar(); aplicarApariencia(); pintarUsuario();
+      } }),
+      h('button', { class: 'icono', title: 'Ajustes (perfil, color y tema)', html: '&#9881;', onclick: editarPerfil }),
       SES ? h('button', { class: 'icono', title: 'Cerrar sesión', html: '&#x23FB;', onclick: cerrarSesion }) : null]);
   }
 
@@ -236,6 +267,7 @@
       c.title = p.nombre;
       ui.canales.appendChild(c);
     });
+    if (ADMIN && D.plantillas.length <= 1) agregar(ui.canales, h('div', { class: 'hint', style: { padding: '2px 8px 6px', fontSize: '12px' }, text: 'Crea plantillas propias con el botón + de arriba.' }));
     agregar(ui.canales, h('div', { class: 'cat' }, h('span', { text: 'Herramientas' })));
     agregar(ui.canales, [
       canal('reglamento', false, verReglamento),
@@ -286,54 +318,67 @@
     refrescar();
   }
 
+  function paso(n, titulo, desc) {
+    return h('div', { class: 'paso' }, h('span', { class: 'num', text: String(n) }), h('div', null, h('div', { class: 'tt', text: titulo }), desc ? h('div', { class: 'ds', text: desc }) : null));
+  }
+  function pintarSelFormato() {
+    if (!ui.selFormato) return;
+    ui.selFormato.innerHTML = '';
+    D.formatos.forEach(function (x) { ui.selFormato.appendChild(h('option', { value: x.id, text: 'Formato: ' + x.nombre, selected: x.id === formatoActual().id })); });
+  }
+
   function pintarFormulario() {
     var f = ui.form, scroll = ui.scrollForm.scrollTop;
     f.innerHTML = '';
-    agregar(f, [h('h2', { text: 'Redactar nota' }), h('div', { class: 'hint', style: { fontSize: '14px', marginTop: '4px' }, text: 'Rellena los campos; la vista previa se actualiza al instante.' })]);
+    agregar(f, [h('h2', { text: 'Redactar nota' }), h('div', { class: 'hint', style: { fontSize: '14px', marginTop: '4px' }, text: 'Rellena los pasos; la vista previa de la derecha se actualiza al instante.' })]);
+    if (!D.bienvenidaVista) agregar(f, h('div', { class: 'bienvenida' },
+      h('button', { class: 'cerrar', title: 'No volver a mostrar', html: '&times;', onclick: function () { D.bienvenidaVista = true; guardar(); pintarFormulario(); } }),
+      h('b', { text: '¿Cómo funciona? ' }), 'Elige una plantilla en la barra de la izquierda, completa los 4 pasos y pulsa ',
+      h('b', { text: 'Copiar nota' }), ' (o ' + CTRL + '+Enter). Encima del botón verás qué datos faltan; haz clic en ellos para ir al campo. Arriba a la derecha de la vista previa eliges el formato.'));
 
-    // Formato
-    var selF = h('select', { class: 'in', onchange: function () { D.formatoActual = selF.value; guardar(); pintarFormulario(); refrescar(); } });
-    D.formatos.forEach(function (x) { selF.appendChild(h('option', { value: x.id, text: x.nombre, selected: x.id === formatoActual().id })); });
-    agregar(f, seccion('Formato de la nota', h('div', { class: 'row' }, h('div', { class: 'grow' }, selF),
-      ADMIN ? h('button', { class: 'enlace', text: 'Organizar formatos', onclick: organizarFormatos }) : null)));
-
-    // Usuarios
-    ui.usuarios = h('div');
+    // Paso 1: usuarios
+    agregar(f, paso(1, '¿A quién reportas?', 'Nick e ID de Discord. Añade varios si fueron varios usuarios.'));
+    ui.usuarios = h('div', { style: { marginTop: '12px' } });
     pintarUsuarios();
     var chkM = h('input', { type: 'checkbox', checked: D.mencion, onchange: function () { D.mencion = chkM.checked; guardar(); refrescar(); } });
-    agregar(f, seccion('Usuarios reportados', [ui.usuarios,
-      h('button', { class: 'enlace', text: '+ Añadir otro usuario', onclick: function () { F.usuarios.push({ nick: '', id: '', sancion: '' }); pintarUsuarios(); refrescar(); } }),
-      h('label', { class: 'chk', style: { marginTop: '6px' }, title: 'Activado: la cabecera usa <@ID> y Discord la convierte en mención.\nDesactivado: escribe @nick en texto plano.' }, chkM, h('span', { text: 'Usar mención real (<@ID>)' }))]));
-
-    // Nombre / apodos
+    agregar(f, [ui.usuarios,
+      h('div', { class: 'row', style: { justifyContent: 'space-between', flexWrap: 'wrap' } },
+        h('button', { class: 'enlace', text: '+ Añadir otro usuario', onclick: function () { F.usuarios.push({ nick: '', id: '', sancion: '' }); pintarUsuarios(); refrescar(); } }),
+        h('label', { class: 'chk', title: 'Activado: la cabecera usa <@ID> y Discord lo convierte en mención.\nDesactivado: escribe @nick en texto plano.' }, chkM, h('span', { text: 'Mención real (<@ID>)' })))]);
     var usaApodos = M.usa(formatoActual(), 'apodos');
-    var pre = h('select', { class: 'in', style: { width: '140px' }, title: 'Prefijo usado por el marcador {apodos} del formato', onchange: function () { F.prefijo = pre.value; refrescar(); } });
+    var pre = h('select', { class: 'in', style: { width: '140px' }, title: 'Prefijo de la línea de nombre', onchange: function () { F.prefijo = pre.value; refrescar(); } });
     ['Apodos:', 'Nombre:', '(sin prefijo)'].forEach(function (x) { pre.appendChild(h('option', { value: x, text: x, selected: F.prefijo === x })); });
     agregar(f, seccion('Nombre de usuario / apodos (opcional)', h('div', { class: 'row' }, usaApodos ? pre : null,
       h('div', { class: 'grow' }, entrada(F.nombre, 'p. ej. emixx2275', function (v) { F.nombre = v; })))));
 
-    // Reglas
+    // Paso 2: regla y sanción
+    agregar(f, paso(2, '¿Qué norma incumplió?', 'Elige una o varias reglas y la sanción aplicada.'));
+    ui.etiquetas = h('div', { class: 'etiquetas' });
     ui.reglas = h('div', { class: 'reglas' });
-    var filtro = entrada(F.filtro, 'Buscar regla por número o texto (p. ej. 10, hacks, spam)...', function (v) { F.filtro = v; pintarReglas(); });
+    ui.verTodas = h('button', { class: 'enlace', onclick: function () { F.verTodas = !F.verTodas; pintarReglas(); } });
+    var filtro = entrada(F.filtro, 'Buscar regla: número o palabra (p. ej. 10, hacks, spam)...', function (v) { F.filtro = v; pintarReglas(); });
+    filtro.setAttribute('data-campo', 'regla');
     pintarReglas();
-    agregar(f, seccion('Reglas infringidas', [filtro, ui.reglas,
-      h('div', { style: { marginTop: '4px' } }, h('button', { class: 'enlace', text: 'Ver reglamento', onclick: verReglamento }),
+    agregar(f, seccion(null, [ui.etiquetas, h('div', { style: { height: '10px' } }), filtro, ui.reglas,
+      h('div', { style: { marginTop: '6px' } }, ui.verTodas,
+        h('span', { style: { color: 'var(--muted)', margin: '0 8px' }, text: '·' }),
+        h('button', { class: 'enlace', text: 'Ver reglamento', onclick: verReglamento }),
         ADMIN ? h('span', { style: { color: 'var(--muted)', margin: '0 8px' }, text: '·' }) : null,
-        ADMIN ? h('button', { class: 'enlace', text: 'Editar lista de reglas', onclick: editarReglas }) : null)]));
-
-    // Sanción
+        ADMIN ? h('button', { class: 'enlace', text: 'Editar lista de reglas', onclick: editarReglas }) : null)], 10));
     var dl = h('datalist', { id: 'lista-sanciones' });
     ['Nota', 'Se deja nota', 'Se deja nota - Enviado a verificación', 'Recomendación', 'Advertencia', 'Warn', 'Registro', 'Mute', 'Ban',
       'Baneo temporal de X días', 'Registro + Baneo temporal de X días', 'Enviado a verificación'].forEach(function (x) { dl.appendChild(h('option', { value: x })); });
-    agregar(f, seccion('Sanción', [entrada(F.sancion, 'Escribe o elige', function (v) { F.sancion = v; }, { list: 'lista-sanciones' }), dl,
-      h('div', { class: 'hint', text: 'Escribe o elige. Los usuarios con sanción propia se agrupan aparte.' })]));
+    var inSancion = entrada(F.sancion, 'Escribe o elige: Nota, Advertencia, Ban...', function (v) { F.sancion = v; }, { list: 'lista-sanciones' });
+    inSancion.setAttribute('data-campo', 'sanción');
+    agregar(f, seccion('Sanción', [inSancion, dl,
+      h('div', { class: 'hint', text: 'Si un usuario tiene una sanción distinta, escríbela en su fila del paso 1.' })], 18));
 
-    // Campos de la plantilla
-    agregar(f, h('div', { class: 'divsec' }, h('span', { class: 'lbl', text: 'Detalles · ' + (actual ? actual.nombre : '') })));
+    // Paso 3: detalles de la plantilla
+    agregar(f, paso(3, '¿Qué pasó?', actual ? 'Plantilla: ' + actual.nombre : ''));
     ui.infoNac = null; ui.infoDur = null;
-    if (!camposAct.length) agregar(f, h('div', { class: 'hint', style: { fontStyle: 'italic', fontSize: '14px', marginTop: '14px' }, text: 'Esta plantilla no tiene campos para rellenar.' }));
+    if (!camposAct.length) agregar(f, h('div', { class: 'vacio', text: 'Esta plantilla no tiene campos para rellenar.' }));
     var hayHora = false;
-    camposAct.forEach(function (c) {
+    camposAct.forEach(function (c, idx) {
       var v = F.valores[c.clave];
       function set(x) { F.valores[c.clave] = x; }
       if (c.tipo === 'casilla') {
@@ -341,26 +386,32 @@
         agregar(f, h('div', { class: 'sec', style: { marginTop: '16px' } }, h('label', { class: 'chk', title: 'Añade: ' + c.def }, cb, h('span', { text: c.etiqueta }))));
         return;
       }
-      var comp;
+      var comp, campo;
       if (c.tipo === 'largo') {
-        comp = h('textarea', { class: 'in', rows: 3, placeholder: 'Escribe aquí...', value: v });
+        comp = campo = h('textarea', { class: 'in', rows: 3, placeholder: 'Escribe aquí...', value: v });
         comp.addEventListener('input', function () { set(comp.value); autoAlto(comp); refrescar(); });
         setTimeout(function () { autoAlto(comp); }, 0);
       } else if (c.tipo === 'opciones') {
         var id = 'op-' + uid();
         var lista = h('datalist', { id: id });
         c.opciones.forEach(function (o) { if (o) lista.appendChild(h('option', { value: o })); });
-        comp = h('div', null, entrada(v, 'Elige o escribe (puede quedar vacío)', set, { list: id }), lista);
+        campo = entrada(v, 'Elige o escribe (puede quedar vacío)', set, { list: id });
+        comp = h('div', null, campo, lista);
       } else {
-        comp = entrada(v, c.tipo === 'nacimiento' ? 'dd/mm/aaaa' : c.tipo === 'hora' ? 'hh:mm (p. ej. 10:26)' : '', set);
+        comp = campo = entrada(v, c.tipo === 'nacimiento' ? 'dd/mm/aaaa' : c.tipo === 'hora' ? 'hh:mm (p. ej. 10:26)' : '', set);
       }
-      agregar(f, seccion(c.etiqueta, comp, 18));
+      campo.setAttribute('data-campo', c.etiqueta);
+      if (c.tipo === 'nacimiento') campo.setAttribute('data-nacimiento', '1');
+      if (c.tipo === 'hora') campo.setAttribute('data-hora', '1');
+      agregar(f, seccion(c.etiqueta, comp, idx ? 18 : 12));
       if (c.tipo === 'nacimiento') agregar(f, ui.infoNac = h('div', { class: 'info' }));
       if (c.tipo === 'hora') hayHora = true;
     });
     if (hayHora) agregar(f, ui.infoDur = h('div', { class: 'info' }));
 
-    agregar(f, seccion('Ticket', entrada(F.ticket, 'Pega aquí el enlace del ticket-logs', function (v) { F.ticket = v; })));
+    // Paso 4: ticket y pruebas
+    agregar(f, paso(4, 'Ticket y pruebas', 'Enlace del ticket-logs y, si las hay, pruebas.'));
+    agregar(f, seccion('Ticket', entrada(F.ticket, 'Pega aquí el enlace del ticket-logs', function (v) { F.ticket = v; }), 12));
     agregar(f, seccion('Pruebas (opcional)', entrada(F.pruebas, 'Enlaces o "Adjunto multimedia"', function (v) { F.pruebas = v; }), 18));
     ui.scrollForm.scrollTop = scroll;
   }
@@ -370,8 +421,8 @@
     ui.usuarios.innerHTML = '';
     F.usuarios.forEach(function (u, i) {
       agregar(ui.usuarios, h('div', { class: 'usuario' },
-        entrada(u.nick, 'Nick / usuario', function (v) { u.nick = v; }),
-        entrada(u.id, 'ID de Discord', function (v) { u.id = v; }, { title: 'Clic derecho sobre el usuario en Discord > Copiar ID' }),
+        entrada(u.nick, 'Nick / usuario', function (v) { u.nick = v; }, { 'data-campo': 'usuario' }),
+        entrada(u.id, 'ID de Discord', function (v) { u.id = v; }, { title: 'Clic derecho sobre el usuario en Discord > Copiar ID', 'data-campo': 'ID', inputmode: 'numeric' }),
         entrada(u.sancion, 'Sanción propia (opcional)', function (v) { u.sancion = v; }, { title: 'Déjalo vacío para usar la sanción general' }),
         h('button', { class: 'x', title: 'Quitar usuario', html: '&times;', onclick: function () {
           if (F.usuarios.length === 1) F.usuarios[0] = { nick: '', id: '', sancion: '' }; else F.usuarios.splice(i, 1);
@@ -381,20 +432,32 @@
   }
 
   function pintarReglas() {
-    var q = M.slug(F.filtro || ''), crudo = (F.filtro || '').trim(), sec = M.secciones(D.reglamento);
+    var q = M.slug(F.filtro || ''), crudo = (F.filtro || '').trim(), sec = M.secciones(D.reglamento), todas = reglas();
+    // Etiquetas de las reglas elegidas
+    ui.etiquetas.innerHTML = '';
+    var elegidas = todas.filter(function (r) { return F.sel[M.claveRegla(r)]; });
+    if (!elegidas.length) agregar(ui.etiquetas, h('span', { class: 'vacio', style: { marginTop: 0 }, text: 'Ninguna regla elegida. Búscala abajo o abre la lista completa.' }));
+    elegidas.forEach(function (r) {
+      agregar(ui.etiquetas, h('span', { class: 'etiqueta' }, h('b', { text: 'Regla ' + r.numero }), r.motivo,
+        h('button', { title: 'Quitar', html: '&times;', onclick: function () { delete F.sel[M.claveRegla(r)]; pintarReglas(); refrescar(); } })));
+    });
+    // Lista (solo si se busca o se pide verla entera)
     ui.reglas.innerHTML = '';
+    var mostrar = F.verTodas || crudo;
+    ui.verTodas.textContent = F.verTodas ? 'Ocultar la lista de reglas' : 'Ver todas las reglas (' + todas.length + ')';
+    if (!mostrar) return;
     var n = 0;
-    reglas().forEach(function (r) {
+    todas.forEach(function (r) {
       var k = M.claveRegla(r), txt = M.slug(r.numero + ' ' + r.motivo + ' regla');
-      var ok = !crudo || F.sel[k] || r.numero === crudo || (!/^\d+$/.test(crudo) && txt.indexOf(q) >= 0);
+      var ok = !crudo || r.numero === crudo || (!/^\d+$/.test(crudo) && txt.indexOf(q) >= 0);
       if (!ok) return;
       n++;
       var s = sec[r.numero];
-      var cb = h('input', { type: 'checkbox', checked: !!F.sel[k], onchange: function () { if (cb.checked) F.sel[k] = true; else delete F.sel[k]; refrescar(); } });
+      var cb = h('input', { type: 'checkbox', checked: !!F.sel[k], onchange: function () { if (cb.checked) F.sel[k] = true; else delete F.sel[k]; pintarReglas(); refrescar(); } });
       agregar(ui.reglas, h('label', { class: 'chk', title: s ? 'Regla ' + r.numero + '. ' + s[0] + '\n\n' + s[1].slice(0, 500) : null }, cb,
         h('span', null, h('b', { text: 'Regla ' + r.numero }), ' · ' + r.motivo)));
     });
-    if (!n) agregar(ui.reglas, h('div', { class: 'hint', style: { fontStyle: 'italic' }, text: 'Ninguna regla coincide.' }));
+    if (!n) agregar(ui.reglas, h('div', { class: 'vacio', text: 'Ninguna regla coincide con "' + crudo + '".' }));
   }
 
   // ================================================================ vista previa
@@ -423,9 +486,27 @@
     }
     ultimo = M.generar(e);
     pintarMensaje(ui.msg, ultimo, e);
+    pintarFaltan();
     var n = M.limpiar(ultimo).length;
     ui.contador.textContent = n + ' / 2000';
     ui.contador.className = 'contador' + (n > 2000 ? ' mal' : '');
+  }
+  function pintarFaltan() {
+    var l = M.faltantes(ultimo);
+    ui.faltan.innerHTML = '';
+    if (!l.length) { agregar(ui.faltan, h('span', { class: 'ok', text: 'Todo listo para copiar' })); return; }
+    agregar(ui.faltan, h('span', { text: 'Falta: ' }));
+    l.forEach(function (x) { agregar(ui.faltan, h('button', { text: x, title: 'Ir al campo', onclick: function () { enfocar(x); } })); });
+  }
+  function enfocar(etq) {
+    var cands = [].slice.call(ui.form.querySelectorAll('[data-campo]')).filter(function (el) { return el.getAttribute('data-campo') === etq; });
+    if (!cands.length && /^(días|fecha en que|edad)/.test(etq)) cands = [].slice.call(ui.form.querySelectorAll('[data-nacimiento]'));
+    if (!cands.length && /^duración/.test(etq)) cands = [].slice.call(ui.form.querySelectorAll('[data-hora]')).filter(function (el) { return !el.value; });
+    var el = cands.filter(function (x) { return !x.value; })[0] || cands[0];
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.focus({ preventScroll: true });
+    el.classList.remove('resaltar'); void el.offsetWidth; el.classList.add('resaltar');
   }
   function nicksDe(e) { var n = {}; e.usuarios.forEach(function (u) { if (u.id) n[u.id] = (u.nick || '').trim(); }); return n; }
   function pintarMensaje(cont, texto, e) {
@@ -507,18 +588,42 @@
   function alerta(titulo, texto) { return modal(titulo, parrafo(texto), [{ t: 'Entendido' }], { enter: 0 }); }
 
   // ---------------------------------------------------------------- perfil
+  var PALETA = ['#5865F2', '#EB459E', '#ED4245', '#F47B67', '#FAA61A', '#FEE75C', '#57F287', '#23A55A', '#1ABC9C', '#00A8FC', '#3B82F6', '#9B59B6'];
   function editarPerfil() {
-    var p = D.perfil;
+    var antes = JSON.stringify({ perfil: D.perfil, tema: D.tema });
+    var p = { nombre: D.perfil.nombre, rol: D.perfil.rol, color: D.perfil.color || '#5865F2' }, tema = D.tema || 'oscuro';
     var n = h('input', { class: 'in', value: p.nombre }), r = h('input', { class: 'in', value: p.rol, placeholder: 'p. ej. Ayudantes [AUE]' });
-    var c = h('input', { type: 'color', value: p.color, style: { width: '64px', height: '38px', border: '0', background: 'none', cursor: 'pointer' } });
-    modal('Perfil', h('div', null, h('span', { class: 'lbl', text: 'Nombre visible' }), h('div', { style: { height: '8px' } }), n,
+    var colores = h('div', { class: 'colores' }), segmento = h('div', { class: 'segmento' }), muestra = h('div', { class: 'muestra' });
+    var libre = h('input', { type: 'color', value: p.color, title: 'Otro color', style: { width: '34px', height: '34px', border: '0', padding: '0', background: 'none', cursor: 'pointer' } });
+    function previa() {
+      D.perfil = { nombre: n.value.trim() || 'Moderador', rol: r.value.trim(), color: p.color }; D.tema = tema;
+      aplicarApariencia();
+      colores.querySelectorAll('button').forEach(function (b) { b.classList.toggle('sel', b.getAttribute('data-c').toLowerCase() === p.color.toLowerCase()); });
+      segmento.querySelectorAll('button').forEach(function (b) { b.classList.toggle('sel', b.getAttribute('data-t') === tema); });
+      muestra.innerHTML = '';
+      var m = h('div', { class: 'msg', style: { padding: '10px 12px' } });
+      pintarMensaje(m, '**Así se verá tu nombre** y tus menciones: <@1>\n-# Botones y casillas usarán este color.', { usuarios: [{ id: '1', nick: 'usuario' }] });
+      agregar(muestra, [m, h('div', { style: { padding: '0 12px 10px 68px', display: 'flex', gap: '8px', alignItems: 'center' } },
+        h('button', { class: 'btn peq', text: 'Botón' }), h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: true }), h('span', { text: 'Casilla' })))]);
+    }
+    PALETA.forEach(function (c) { agregar(colores, h('button', { 'data-c': c, title: c, style: { background: c }, onclick: function () { p.color = c; libre.value = c; previa(); } })); });
+    agregar(colores, libre);
+    libre.addEventListener('input', function () { p.color = libre.value; previa(); });
+    [['oscuro', 'Oscuro'], ['claro', 'Claro'], ['sistema', 'Automático']].forEach(function (t) {
+      agregar(segmento, h('button', { 'data-t': t[0], text: t[1], onclick: function () { tema = t[0]; previa(); } }));
+    });
+    n.addEventListener('input', previa); r.addEventListener('input', previa);
+    previa();
+    modal('Ajustes', h('div', { style: { width: 'min(460px, 86vw)' } },
+      h('span', { class: 'lbl', text: 'Nombre visible' }), h('div', { style: { height: '8px' } }), n,
       h('span', { class: 'lbl', style: { marginTop: '16px' }, text: 'Rol (opcional)' }), h('div', { style: { height: '8px' } }), r,
-      h('span', { class: 'lbl', style: { marginTop: '16px' }, text: 'Color del nombre' }), h('div', { style: { height: '8px' } }), c,
-      h('div', { class: 'hint', text: 'Solo cambia cómo te ves en la vista previa.' })),
-      [{ t: 'Cancelar', c: 'plano' }, { t: 'Guardar' }], { enter: 1 }).then(function (i) {
-      if (i !== 1) return;
-      D.perfil = { nombre: n.value.trim() || 'Moderador', rol: r.value.trim(), color: c.value };
-      guardar(); pintarUsuario(); refrescar();
+      h('span', { class: 'lbl', style: { marginTop: '18px' }, text: 'Color' }),
+      h('div', { class: 'hint', style: { marginTop: '2px' }, text: 'Se usa para tu nombre y para toda la interfaz (botones, casillas, menciones).' }), colores,
+      h('span', { class: 'lbl', style: { marginTop: '18px' }, text: 'Tema' }), segmento,
+      h('span', { class: 'lbl', style: { marginTop: '18px' }, text: 'Vista previa' }), muestra),
+      [{ t: 'Cancelar', c: 'plano' }, { t: 'Guardar' }], { enter: 1, ancho: 'auto' }).then(function (i) {
+      if (i !== 1) { var a = JSON.parse(antes); D.perfil = a.perfil; D.tema = a.tema; }
+      aplicarApariencia(); guardar(); pintarUsuario(); refrescar();
     });
   }
 
@@ -828,9 +933,56 @@
         return false;
       } },
       { t: 'Guardar y cerrar', c: 'verde' }], { ancho: 'auto', fijo: true }).then(function () {
-      guardar(true); pintarFormulario(); refrescar();
+      guardar(true); pintarSelFormato(); pintarFormulario(); refrescar();
     });
   }
+
+  // ================================================================ notificaciones
+  var AV = (SES && SES.avisos) || { notifs: [], nuevas: 0, leido: '' };
+  function hace(fecha) {
+    var s = Math.max(0, (Date.now() - new Date(fecha).getTime()) / 1000);
+    if (s < 60) return 'hace un momento';
+    if (s < 3600) return 'hace ' + Math.floor(s / 60) + ' min';
+    if (s < 86400) return 'hace ' + Math.floor(s / 3600) + ' h';
+    if (s < 86400 * 7) return 'hace ' + Math.floor(s / 86400) + ' d';
+    return new Date(fecha).toLocaleDateString('es-ES');
+  }
+  function pintarCampana() {
+    if (!ui.campana) return;
+    var b = ui.campana.querySelector('.insignia');
+    if (b) b.remove();
+    if (AV.nuevas > 0) ui.campana.appendChild(h('span', { class: 'insignia', text: AV.nuevas > 9 ? '9+' : String(AV.nuevas) }));
+    ui.campana.title = AV.nuevas ? AV.nuevas + ' notificación(es) nueva(s)' : 'Notificaciones';
+  }
+  function abrirAvisos() {
+    var ya = document.querySelector('.avisos'); if (ya) { ya.remove(); return; }
+    var leidoAntes = AV.leido;
+    var r = ui.campana.getBoundingClientRect();
+    var caja = h('div', { class: 'avisos', style: { top: (r.bottom + 6) + 'px', right: Math.max(8, window.innerWidth - r.right) + 'px' } }, h('h4', { text: 'Notificaciones' }));
+    if (!AV.notifs.length) agregar(caja, h('div', { class: 'vacio', style: { padding: '6px 10px 12px' }, text: 'No hay notificaciones todavía. Aquí verás, por ejemplo, cuándo se une alguien al equipo.' }));
+    AV.notifs.forEach(function (n) {
+      agregar(caja, h('div', { class: 'aviso-item' + (!leidoAntes || n.fecha > leidoAntes ? ' nueva' : '') },
+        h('div', { class: 'ic', text: n.tipo === 'miembro' ? '+' : '!' }),
+        h('div', null, h('div', { class: 't', text: n.texto }), h('div', { class: 'f', text: hace(n.fecha) + (n.por ? ' · añadido por ' + n.por : '') }))));
+    });
+    document.body.appendChild(caja);
+    function fuera(e) { if (!caja.contains(e.target) && !ui.campana.contains(e.target)) cerrar(); }
+    function tecla(e) { if (e.key === 'Escape') cerrar(); }
+    function cerrar() { caja.remove(); document.removeEventListener('mousedown', fuera, true); document.removeEventListener('keydown', tecla, true); }
+    setTimeout(function () { document.addEventListener('mousedown', fuera, true); document.addEventListener('keydown', tecla, true); }, 0);
+    if (AV.nuevas) { AV.nuevas = 0; AV.leido = new Date().toISOString(); pintarCampana(); api('leerNotifs', {}).catch(function () {}); }
+  }
+  function sondearAvisos() {
+    if (!SES) return;
+    api('notifs', {}).then(function (r) {
+      var nuevas = r.notifs.filter(function (n) { return !AV.notifs.some(function (v) { return v.id === n.id; }); });
+      AV = r;
+      pintarCampana();
+      if (nuevas.length && r.nuevas) toast('🔔 ' + nuevas[0].texto);
+    }).catch(function () {});
+  }
+  if (SES) setInterval(function () { if (!document.hidden) sondearAvisos(); }, 60000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) sondearAvisos(); });
 
   // ================================================================ administración del staff
   function panelStaff() {
