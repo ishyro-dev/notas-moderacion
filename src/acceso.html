@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Notas de Moderación</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='20' fill='%235865F2'/%3E%3Ctext x='32' y='42' font-family='Arial' font-weight='700' font-size='26' fill='white' text-anchor='middle'%3ENM%3C/text%3E%3C/svg%3E">
+<style id="estilo-acceso">
+  html,body{margin:0;height:100%;background:#313338;color:#DBDEE1;font-family:"gg sans","Noto Sans","Segoe UI","Helvetica Neue",Helvetica,Arial,sans-serif}
+  body{display:grid;place-items:center;background:radial-gradient(1200px 600px at 20% -10%,#5865F233,transparent),radial-gradient(900px 500px at 110% 110%,#23A55A22,transparent),#1E1F22}
+  .tarjeta{background:#313338;width:min(440px,92vw);border-radius:10px;padding:32px;box-shadow:0 8px 40px rgba(0,0,0,.45);text-align:center}
+  .tarjeta[hidden]{display:none}
+  .logo{width:64px;height:64px;border-radius:20px;background:#5865F2;color:#fff;font-weight:800;font-size:24px;display:grid;place-items:center;margin:0 auto 16px}
+  h1{margin:0 0 6px;font-size:24px;color:#F2F3F5}
+  p{margin:0 0 22px;color:#B5BAC1;font-size:15px}
+  label{display:block;text-align:left;font-size:12px;font-weight:700;color:#B5BAC1;text-transform:uppercase;margin-bottom:8px}
+  label .err{color:#FA777C;text-transform:none;font-style:italic;font-weight:500}
+  input[type=text]{width:100%;box-sizing:border-box;background:#1E1F22;border:0;border-radius:6px;padding:12px;color:#F2F3F5;font-size:18px;letter-spacing:.12em;text-align:center;font-family:Consolas,Menlo,monospace;outline:none;text-transform:uppercase}
+  input[type=text]:focus{box-shadow:0 0 0 2px #5865F2}
+  .rec{display:flex;align-items:center;gap:8px;margin:14px 0 20px;font-size:14px;color:#B5BAC1;text-transform:none;font-weight:500;cursor:pointer}
+  .rec input{width:18px;height:18px;accent-color:#5865F2;margin:0}
+  button{width:100%;background:#5865F2;color:#fff;border:0;border-radius:6px;padding:12px;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit}
+  button:hover{background:#4752C4}
+  button:disabled{opacity:.6;cursor:wait}
+  .pie{margin-top:18px;font-size:12.5px;color:#80848E}
+  .cargando{color:#B5BAC1;font-size:15px}
+  .agitar{animation:ag .35s}
+  @keyframes ag{20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+</style>
+</head>
+<body>
+<div class="cargando" id="cargando">Cargando...</div>
+<form class="tarjeta" id="f" autocomplete="off" hidden>
+  <div class="logo">NM</div>
+  <h1>Notas de Moderación</h1>
+  <p>Herramienta privada del staff. Introduce tu código de acceso.</p>
+  <label for="c">Código de acceso <span class="err" id="e"></span></label>
+  <input type="text" id="c" placeholder="XXXX-XXXX-XXXX-XXXX" maxlength="40" spellcheck="false" autocapitalize="characters">
+  <label class="rec"><input type="checkbox" id="r" checked> Recordar en este dispositivo</label>
+  <button id="b" type="submit">Entrar</button>
+  <div class="pie">¿No tienes código? Pídeselo a un administrador.</div>
+</form>
+<script>
+(function () {
+  var f = document.getElementById('f'), c = document.getElementById('c'), r = document.getElementById('r'),
+      b = document.getElementById('b'), e = document.getElementById('e'), carg = document.getElementById('cargando');
+  function token() { try { return localStorage.getItem('nm.token') || sessionStorage.getItem('nm.token'); } catch (z) { return null; } }
+  function borrarToken() { try { localStorage.removeItem('nm.token'); sessionStorage.removeItem('nm.token'); } catch (z) {} }
+  function api(accion, datos) {
+    var cab = { 'Content-Type': 'application/json' }, t = token();
+    if (t) cab.Authorization = 'Bearer ' + t;
+    return fetch('/api', { method: 'POST', headers: cab, body: JSON.stringify(Object.assign({ accion: accion }, datos || {})) })
+      .then(function (res) {
+        return res.json().catch(function () { return { error: 'Respuesta no válida del servidor (' + res.status + ')' }; }).then(function (j) {
+          if (!res.ok) { var err = new Error(j.error || ('Error ' + res.status)); err.status = res.status; throw err; }
+          return j;
+        });
+      });
+  }
+  function mostrarLogin(msg) {
+    carg.hidden = true; f.hidden = false; b.disabled = false; b.textContent = 'Entrar';
+    if (msg) { e.textContent = '- ' + msg; f.classList.remove('agitar'); void f.offsetWidth; f.classList.add('agitar'); }
+    c.focus();
+  }
+  function salir(avisar) {
+    var fin = function () { borrarToken(); location.reload(); };
+    if (avisar) api('salir').then(fin, fin); else fin();
+  }
+  function iniciar() {
+    api('inicio').then(function (d) {
+      window.__NM = { yo: d.yo, config: d.config, prefs: d.prefs, api: api, salir: salir };
+      window.__NM_DEF = d.app.def;
+      document.getElementById('estilo-acceso').remove();
+      var st = document.createElement('style'); st.textContent = d.app.css; document.head.appendChild(st);
+      document.body.innerHTML = d.app.html;
+      var sc = document.createElement('script'); sc.textContent = d.app.js; document.body.appendChild(sc);
+    }).catch(function (err) {
+      if (err.status === 401) { borrarToken(); mostrarLogin(token() ? '' : (err.message === 'Acceso revocado' ? 'tu acceso fue revocado' : '')); }
+      else mostrarLogin(err.message);
+    });
+  }
+  f.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    if (!c.value.replace(/[^0-9a-z]/gi, '')) { mostrarLogin('escribe tu código'); return; }
+    b.disabled = true; b.textContent = 'Comprobando...'; e.textContent = '';
+    api('login', { codigo: c.value }).then(function (d) {
+      try { (r.checked ? localStorage : sessionStorage).setItem('nm.token', d.token); } catch (z) {}
+      carg.hidden = false; f.hidden = true;
+      iniciar();
+    }).catch(function (err) { mostrarLogin(err.status === 401 ? 'código no válido' : err.message); });
+  });
+  if (token()) iniciar(); else mostrarLogin();
+})();
+</script>
+</body>
+</html>

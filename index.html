@@ -10,6 +10,7 @@
   html,body{margin:0;height:100%;background:#313338;color:#DBDEE1;font-family:"gg sans","Noto Sans","Segoe UI","Helvetica Neue",Helvetica,Arial,sans-serif}
   body{display:grid;place-items:center;background:radial-gradient(1200px 600px at 20% -10%,#5865F233,transparent),radial-gradient(900px 500px at 110% 110%,#23A55A22,transparent),#1E1F22}
   .tarjeta{background:#313338;width:min(440px,92vw);border-radius:10px;padding:32px;box-shadow:0 8px 40px rgba(0,0,0,.45);text-align:center}
+  .tarjeta[hidden]{display:none}
   .logo{width:64px;height:64px;border-radius:20px;background:#5865F2;color:#fff;font-weight:800;font-size:24px;display:grid;place-items:center;margin:0 auto 16px}
   h1{margin:0 0 6px;font-size:24px;color:#F2F3F5}
   p{margin:0 0 22px;color:#B5BAC1;font-size:15px}
@@ -23,12 +24,14 @@
   button:hover{background:#4752C4}
   button:disabled{opacity:.6;cursor:wait}
   .pie{margin-top:18px;font-size:12.5px;color:#80848E}
+  .cargando{color:#B5BAC1;font-size:15px}
   .agitar{animation:ag .35s}
   @keyframes ag{20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
 </style>
 </head>
 <body>
-<form class="tarjeta" id="f" autocomplete="off">
+<div class="cargando" id="cargando">Cargando...</div>
+<form class="tarjeta" id="f" autocomplete="off" hidden>
   <div class="logo">NM</div>
   <h1>Notas de Moderación</h1>
   <p>Herramienta privada del staff. Introduce tu código de acceso.</p>
@@ -39,166 +42,55 @@
   <div class="pie">¿No tienes código? Pídeselo a un administrador.</div>
 </form>
 <script>
-/* Cifrado de la web: AES-256-GCM + PBKDF2. Funciona en navegador y en Node 18+. */
-var Cripto = (function () {
-  'use strict';
-  var wc = (typeof globalThis !== 'undefined' && globalThis.crypto && globalThis.crypto.subtle) ? globalThis.crypto : require('crypto').webcrypto;
-  var subtle = wc.subtle;
-  var enc = new TextEncoder(), dec = new TextDecoder();
-  var ITER = 150000;
-  var ALF = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // sin 0/O/1/I para evitar confusiones
-
-  function b64(u8) { var s = ''; for (var i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
-  function deB64(s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
-  function hex(u8) { return Array.prototype.map.call(u8, function (x) { return ('0' + x.toString(16)).slice(-2); }).join(''); }
-  function aleatorio(n) { return wc.getRandomValues(new Uint8Array(n)); }
-
-  function nuevoCodigo() {
-    var r = aleatorio(16), s = '';
-    for (var i = 0; i < 16; i++) { s += ALF[r[i] % 32]; if (i % 4 === 3 && i < 15) s += '-'; }
-    return s;
-  }
-  function normalizar(c) { return String(c || '').toUpperCase().replace(/[^0-9A-Z]/g, ''); }
-
-  async function idDe(codigo) {
-    var h = await subtle.digest('SHA-256', enc.encode('nm-id:' + normalizar(codigo)));
-    return hex(new Uint8Array(h).slice(0, 12));
-  }
-  async function claveDe(codigo, salt, iter) {
-    var base = await subtle.importKey('raw', enc.encode('nm-k:' + normalizar(codigo)), 'PBKDF2', false, ['deriveKey']);
-    return subtle.deriveKey({ name: 'PBKDF2', salt: salt, iterations: iter || ITER, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-  }
-  function aes(raw) { return subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']); }
-  async function cifrar(key, bytes) {
-    var iv = aleatorio(12);
-    var ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, bytes));
-    return { iv: b64(iv), ct: b64(ct) };
-  }
-  async function descifrar(key, obj) {
-    return new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: deB64(obj.iv) }, key, deB64(obj.ct)));
-  }
-  async function comprimir(str) {
-    var s = new Blob([enc.encode(str)]).stream().pipeThrough(new CompressionStream('gzip'));
-    return new Uint8Array(await new Response(s).arrayBuffer());
-  }
-  async function descomprimir(u8) {
-    var s = new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'));
-    return dec.decode(await new Response(s).arrayBuffer());
-  }
-
-  /* datos.json = { version, iter, app:{iv,ct}, accesos:{ id:{s,iv,ct} }, staff:{iv,ct} } */
-  async function crearAcceso(datos, codigo, nombre, appKey, adminKey) {
-    var id = await idDe(codigo), salt = aleatorio(16);
-    var k = await claveDe(codigo, salt, datos.iter);
-    var carga = { k: b64(appKey), n: nombre };
-    if (adminKey) carga.a = b64(adminKey);
-    var c = await cifrar(k, enc.encode(JSON.stringify(carga)));
-    datos.accesos[id] = { s: b64(salt), iv: c.iv, ct: c.ct };
-    return id;
-  }
-  /** Devuelve la sesión o null si el código no es válido. */
-  async function abrir(datos, codigo) {
-    var id = await idDe(codigo), a = datos.accesos && datos.accesos[id];
-    if (!a) return null;
-    var carga;
-    try {
-      var k = await claveDe(codigo, deB64(a.s), datos.iter);
-      carga = JSON.parse(dec.decode(await descifrar(k, a)));
-    } catch (e) { return null; }
-    var appKey = deB64(carga.k);
-    var fuente = await descomprimir(await descifrar(await aes(appKey), datos.app));
-    return { id: id, codigo: codigo, nombre: carga.n, appKey: appKey, adminKey: carga.a ? deB64(carga.a) : null, fuente: fuente };
-  }
-  async function cifrarApp(datos, appKey, fuente) { datos.app = await cifrar(await aes(appKey), await comprimir(fuente)); }
-  async function leerStaff(datos, adminKey) {
-    if (!datos.staff) return [];
-    return JSON.parse(dec.decode(await descifrar(await aes(adminKey), datos.staff)));
-  }
-  async function guardarStaff(datos, adminKey, lista) { datos.staff = await cifrar(await aes(adminKey), enc.encode(JSON.stringify(lista))); }
-
-  /** Cambia todas las claves: los códigos revocados dejan de servir, incluso con copias antiguas. */
-  async function rotar(datos, fuente, lista) {
-    var appKey = aleatorio(32), adminKey = aleatorio(32);
-    await cifrarApp(datos, appKey, fuente);
-    datos.accesos = {};
-    for (var i = 0; i < lista.length; i++) {
-      var p = lista[i];
-      await crearAcceso(datos, p.codigo, p.nombre, appKey, p.admin ? adminKey : null);
-    }
-    await guardarStaff(datos, adminKey, lista);
-    return { appKey: appKey, adminKey: adminKey };
-  }
-  async function inicial(fuente, nombreAdmin) {
-    var datos = { version: 1, iter: ITER, accesos: {} };
-    var codigo = nuevoCodigo();
-    var lista = [{ nombre: nombreAdmin, codigo: codigo, admin: true, creado: new Date().toISOString().slice(0, 10) }];
-    await rotar(datos, fuente, lista);
-    return { datos: datos, codigo: codigo };
-  }
-  async function cifrarTexto(rawKey, texto) { return cifrar(await aes(rawKey), enc.encode(texto)); }
-  async function descifrarTexto(rawKey, obj) { return dec.decode(await descifrar(await aes(rawKey), obj)); }
-
-  return {
-    nuevoCodigo: nuevoCodigo, normalizar: normalizar, idDe: idDe, abrir: abrir, crearAcceso: crearAcceso,
-    cifrarApp: cifrarApp, leerStaff: leerStaff, guardarStaff: guardarStaff, rotar: rotar, inicial: inicial,
-    cifrarTexto: cifrarTexto, descifrarTexto: descifrarTexto, b64: b64, deB64: deB64
-  };
-})();
-if (typeof module !== 'undefined') module.exports = Cripto;
-
 (function () {
   var f = document.getElementById('f'), c = document.getElementById('c'), r = document.getElementById('r'),
-      b = document.getElementById('b'), e = document.getElementById('e');
-  var datosP = null;
-  function datos() {
-    if (!datosP) datosP = fetch('datos.json?t=' + Date.now(), { cache: 'no-store' }).then(function (x) {
-      if (!x.ok) throw new Error('HTTP ' + x.status); return x.json();
-    });
-    return datosP;
+      b = document.getElementById('b'), e = document.getElementById('e'), carg = document.getElementById('cargando');
+  function token() { try { return localStorage.getItem('nm.token') || sessionStorage.getItem('nm.token'); } catch (z) { return null; } }
+  function borrarToken() { try { localStorage.removeItem('nm.token'); sessionStorage.removeItem('nm.token'); } catch (z) {} }
+  function api(accion, datos) {
+    var cab = { 'Content-Type': 'application/json' }, t = token();
+    if (t) cab.Authorization = 'Bearer ' + t;
+    return fetch('/api', { method: 'POST', headers: cab, body: JSON.stringify(Object.assign({ accion: accion }, datos || {})) })
+      .then(function (res) {
+        return res.json().catch(function () { return { error: 'Respuesta no válida del servidor (' + res.status + ')' }; }).then(function (j) {
+          if (!res.ok) { var err = new Error(j.error || ('Error ' + res.status)); err.status = res.status; throw err; }
+          return j;
+        });
+      });
   }
-  function error(t) {
-    e.textContent = '- ' + t;
-    f.classList.remove('agitar'); void f.offsetWidth; f.classList.add('agitar');
+  function mostrarLogin(msg) {
+    carg.hidden = true; f.hidden = false; b.disabled = false; b.textContent = 'Entrar';
+    if (msg) { e.textContent = '- ' + msg; f.classList.remove('agitar'); void f.offsetWidth; f.classList.add('agitar'); }
+    c.focus();
   }
-  function entrar(codigo, recordar, auto) {
-    if (!window.crypto || !crypto.subtle || typeof DecompressionStream === 'undefined') {
-      error('tu navegador es demasiado antiguo (usa Chrome, Edge, Firefox o Safari actualizados)'); return;
-    }
-    b.disabled = true; b.textContent = 'Comprobando...'; e.textContent = '';
-    datos().then(function (d) {
-      return Cripto.abrir(d, codigo).then(function (s) { return { s: s, d: d }; });
-    }).then(function (x) {
-      if (!x.s) {
-        b.disabled = false; b.textContent = 'Entrar';
-        try { localStorage.removeItem('nm.codigo'); sessionStorage.removeItem('nm.codigo'); } catch (z) {}
-        if (!auto) error('código no válido'); else c.focus();
-        return;
-      }
-      try {
-        sessionStorage.setItem('nm.codigo', codigo);
-        if (recordar) localStorage.setItem('nm.codigo', codigo); else localStorage.removeItem('nm.codigo');
-      } catch (z) {}
-      var app = JSON.parse(x.s.fuente);
-      x.s.datos = x.d;
-      window.__NM = x.s;
-      window.__NM_DEF = app.def;
+  function salir(avisar) {
+    var fin = function () { borrarToken(); location.reload(); };
+    if (avisar) api('salir').then(fin, fin); else fin();
+  }
+  function iniciar() {
+    api('inicio').then(function (d) {
+      window.__NM = { yo: d.yo, config: d.config, prefs: d.prefs, api: api, salir: salir };
+      window.__NM_DEF = d.app.def;
       document.getElementById('estilo-acceso').remove();
-      var st = document.createElement('style'); st.textContent = app.css; document.head.appendChild(st);
-      document.body.innerHTML = app.html;
-      var sc = document.createElement('script'); sc.textContent = app.js; document.body.appendChild(sc);
+      var st = document.createElement('style'); st.textContent = d.app.css; document.head.appendChild(st);
+      document.body.innerHTML = d.app.html;
+      var sc = document.createElement('script'); sc.textContent = d.app.js; document.body.appendChild(sc);
     }).catch(function (err) {
-      b.disabled = false; b.textContent = 'Entrar';
-      error('no se pudo cargar la web (' + err.message + ')');
+      if (err.status === 401) { borrarToken(); mostrarLogin(token() ? '' : (err.message === 'Acceso revocado' ? 'tu acceso fue revocado' : '')); }
+      else mostrarLogin(err.message);
     });
   }
   f.addEventListener('submit', function (ev) {
     ev.preventDefault();
-    if (!Cripto.normalizar(c.value)) { error('escribe tu código'); return; }
-    entrar(c.value.trim(), r.checked, false);
+    if (!c.value.replace(/[^0-9a-z]/gi, '')) { mostrarLogin('escribe tu código'); return; }
+    b.disabled = true; b.textContent = 'Comprobando...'; e.textContent = '';
+    api('login', { codigo: c.value }).then(function (d) {
+      try { (r.checked ? localStorage : sessionStorage).setItem('nm.token', d.token); } catch (z) {}
+      carg.hidden = false; f.hidden = true;
+      iniciar();
+    }).catch(function (err) { mostrarLogin(err.status === 401 ? 'código no válido' : err.message); });
   });
-  var guardado = null;
-  try { guardado = sessionStorage.getItem('nm.codigo') || localStorage.getItem('nm.codigo'); } catch (z) {}
-  if (guardado) entrar(guardado, !!localStorage.getItem('nm.codigo'), true); else c.focus();
+  if (token()) iniciar(); else mostrarLogin();
 })();
 </script>
 </body>

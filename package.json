@@ -1,0 +1,6 @@
+{
+  "name": "notas-moderacion",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" }
+}
