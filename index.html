@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Notas de Moderación</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='20' fill='%235865F2'/%3E%3Ctext x='32' y='42' font-family='Arial' font-weight='700' font-size='26' fill='white' text-anchor='middle'%3ENM%3C/text%3E%3C/svg%3E">
+<style id="estilo-acceso">
+  html,body{margin:0;height:100%;background:#313338;color:#DBDEE1;font-family:"gg sans","Noto Sans","Segoe UI","Helvetica Neue",Helvetica,Arial,sans-serif}
+  body{display:grid;place-items:center;background:radial-gradient(1200px 600px at 20% -10%,#5865F233,transparent),radial-gradient(900px 500px at 110% 110%,#23A55A22,transparent),#1E1F22}
+  .tarjeta{background:#313338;width:min(440px,92vw);border-radius:10px;padding:32px;box-shadow:0 8px 40px rgba(0,0,0,.45);text-align:center}
+  .logo{width:64px;height:64px;border-radius:20px;background:#5865F2;color:#fff;font-weight:800;font-size:24px;display:grid;place-items:center;margin:0 auto 16px}
+  h1{margin:0 0 6px;font-size:24px;color:#F2F3F5}
+  p{margin:0 0 22px;color:#B5BAC1;font-size:15px}
+  label{display:block;text-align:left;font-size:12px;font-weight:700;color:#B5BAC1;text-transform:uppercase;margin-bottom:8px}
+  label .err{color:#FA777C;text-transform:none;font-style:italic;font-weight:500}
+  input[type=text]{width:100%;box-sizing:border-box;background:#1E1F22;border:0;border-radius:6px;padding:12px;color:#F2F3F5;font-size:18px;letter-spacing:.12em;text-align:center;font-family:Consolas,Menlo,monospace;outline:none;text-transform:uppercase}
+  input[type=text]:focus{box-shadow:0 0 0 2px #5865F2}
+  .rec{display:flex;align-items:center;gap:8px;margin:14px 0 20px;font-size:14px;color:#B5BAC1;text-transform:none;font-weight:500;cursor:pointer}
+  .rec input{width:18px;height:18px;accent-color:#5865F2;margin:0}
+  button{width:100%;background:#5865F2;color:#fff;border:0;border-radius:6px;padding:12px;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit}
+  button:hover{background:#4752C4}
+  button:disabled{opacity:.6;cursor:wait}
+  .pie{margin-top:18px;font-size:12.5px;color:#80848E}
+  .agitar{animation:ag .35s}
+  @keyframes ag{20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+</style>
+</head>
+<body>
+<form class="tarjeta" id="f" autocomplete="off">
+  <div class="logo">NM</div>
+  <h1>Notas de Moderación</h1>
+  <p>Herramienta privada del staff. Introduce tu código de acceso.</p>
+  <label for="c">Código de acceso <span class="err" id="e"></span></label>
+  <input type="text" id="c" placeholder="XXXX-XXXX-XXXX-XXXX" maxlength="40" spellcheck="false" autocapitalize="characters">
+  <label class="rec"><input type="checkbox" id="r" checked> Recordar en este dispositivo</label>
+  <button id="b" type="submit">Entrar</button>
+  <div class="pie">¿No tienes código? Pídeselo a un administrador.</div>
+</form>
+<script>
+/* Cifrado de la web: AES-256-GCM + PBKDF2. Funciona en navegador y en Node 18+. */
+var Cripto = (function () {
+  'use strict';
+  var wc = (typeof globalThis !== 'undefined' && globalThis.crypto && globalThis.crypto.subtle) ? globalThis.crypto : require('crypto').webcrypto;
+  var subtle = wc.subtle;
+  var enc = new TextEncoder(), dec = new TextDecoder();
+  var ITER = 150000;
+  var ALF = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // sin 0/O/1/I para evitar confusiones
+
+  function b64(u8) { var s = ''; for (var i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
+  function deB64(s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+  function hex(u8) { return Array.prototype.map.call(u8, function (x) { return ('0' + x.toString(16)).slice(-2); }).join(''); }
+  function aleatorio(n) { return wc.getRandomValues(new Uint8Array(n)); }
+
+  function nuevoCodigo() {
+    var r = aleatorio(16), s = '';
+    for (var i = 0; i < 16; i++) { s += ALF[r[i] % 32]; if (i % 4 === 3 && i < 15) s += '-'; }
+    return s;
+  }
+  function normalizar(c) { return String(c || '').toUpperCase().replace(/[^0-9A-Z]/g, ''); }
+
+  async function idDe(codigo) {
+    var h = await subtle.digest('SHA-256', enc.encode('nm-id:' + normalizar(codigo)));
+    return hex(new Uint8Array(h).slice(0, 12));
+  }
+  async function claveDe(codigo, salt, iter) {
+    var base = await subtle.importKey('raw', enc.encode('nm-k:' + normalizar(codigo)), 'PBKDF2', false, ['deriveKey']);
+    return subtle.deriveKey({ name: 'PBKDF2', salt: salt, iterations: iter || ITER, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+  function aes(raw) { return subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']); }
+  async function cifrar(key, bytes) {
+    var iv = aleatorio(12);
+    var ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, bytes));
+    return { iv: b64(iv), ct: b64(ct) };
+  }
+  async function descifrar(key, obj) {
+    return new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: deB64(obj.iv) }, key, deB64(obj.ct)));
+  }
+  async function comprimir(str) {
+    var s = new Blob([enc.encode(str)]).stream().pipeThrough(new CompressionStream('gzip'));
+    return new Uint8Array(await new Response(s).arrayBuffer());
+  }
+  async function descomprimir(u8) {
+    var s = new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return dec.decode(await new Response(s).arrayBuffer());
+  }
+
+  /* datos.json = { version, iter, app:{iv,ct}, accesos:{ id:{s,iv,ct} }, staff:{iv,ct} } */
+  async function crearAcceso(datos, codigo, nombre, appKey, adminKey) {
+    var id = await idDe(codigo), salt = aleatorio(16);
+    var k = await claveDe(codigo, salt, datos.iter);
+    var carga = { k: b64(appKey), n: nombre };
+    if (adminKey) carga.a = b64(adminKey);
+    var c = await cifrar(k, enc.encode(JSON.stringify(carga)));
+    datos.accesos[id] = { s: b64(salt), iv: c.iv, ct: c.ct };
+    return id;
+  }
+  /** Devuelve la sesión o null si el código no es válido. */
+  async function abrir(datos, codigo) {
+    var id = await idDe(codigo), a = datos.accesos && datos.accesos[id];
+    if (!a) return null;
+    var carga;
+    try {
+      var k = await claveDe(codigo, deB64(a.s), datos.iter);
+      carga = JSON.parse(dec.decode(await descifrar(k, a)));
+    } catch (e) { return null; }
+    var appKey = deB64(carga.k);
+    var fuente = await descomprimir(await descifrar(await aes(appKey), datos.app));
+    return { id: id, codigo: codigo, nombre: carga.n, appKey: appKey, adminKey: carga.a ? deB64(carga.a) : null, fuente: fuente };
+  }
+  async function cifrarApp(datos, appKey, fuente) { datos.app = await cifrar(await aes(appKey), await comprimir(fuente)); }
+  async function leerStaff(datos, adminKey) {
+    if (!datos.staff) return [];
+    return JSON.parse(dec.decode(await descifrar(await aes(adminKey), datos.staff)));
+  }
+  async function guardarStaff(datos, adminKey, lista) { datos.staff = await cifrar(await aes(adminKey), enc.encode(JSON.stringify(lista))); }
+
+  /** Cambia todas las claves: los códigos revocados dejan de servir, incluso con copias antiguas. */
+  async function rotar(datos, fuente, lista) {
+    var appKey = aleatorio(32), adminKey = aleatorio(32);
+    await cifrarApp(datos, appKey, fuente);
+    datos.accesos = {};
+    for (var i = 0; i < lista.length; i++) {
+      var p = lista[i];
+      await crearAcceso(datos, p.codigo, p.nombre, appKey, p.admin ? adminKey : null);
+    }
+    await guardarStaff(datos, adminKey, lista);
+    return { appKey: appKey, adminKey: adminKey };
+  }
+  async function inicial(fuente, nombreAdmin) {
+    var datos = { version: 1, iter: ITER, accesos: {} };
+    var codigo = nuevoCodigo();
+    var lista = [{ nombre: nombreAdmin, codigo: codigo, admin: true, creado: new Date().toISOString().slice(0, 10) }];
+    await rotar(datos, fuente, lista);
+    return { datos: datos, codigo: codigo };
+  }
+  async function cifrarTexto(rawKey, texto) { return cifrar(await aes(rawKey), enc.encode(texto)); }
+  async function descifrarTexto(rawKey, obj) { return dec.decode(await descifrar(await aes(rawKey), obj)); }
+
+  return {
+    nuevoCodigo: nuevoCodigo, normalizar: normalizar, idDe: idDe, abrir: abrir, crearAcceso: crearAcceso,
+    cifrarApp: cifrarApp, leerStaff: leerStaff, guardarStaff: guardarStaff, rotar: rotar, inicial: inicial,
+    cifrarTexto: cifrarTexto, descifrarTexto: descifrarTexto, b64: b64, deB64: deB64
+  };
+})();
+if (typeof module !== 'undefined') module.exports = Cripto;
+
+(function () {
+  var f = document.getElementById('f'), c = document.getElementById('c'), r = document.getElementById('r'),
+      b = document.getElementById('b'), e = document.getElementById('e');
+  var datosP = null;
+  function datos() {
+    if (!datosP) datosP = fetch('datos.json?t=' + Date.now(), { cache: 'no-store' }).then(function (x) {
+      if (!x.ok) throw new Error('HTTP ' + x.status); return x.json();
+    });
+    return datosP;
+  }
+  function error(t) {
+    e.textContent = '- ' + t;
+    f.classList.remove('agitar'); void f.offsetWidth; f.classList.add('agitar');
+  }
+  function entrar(codigo, recordar, auto) {
+    if (!window.crypto || !crypto.subtle || typeof DecompressionStream === 'undefined') {
+      error('tu navegador es demasiado antiguo (usa Chrome, Edge, Firefox o Safari actualizados)'); return;
+    }
+    b.disabled = true; b.textContent = 'Comprobando...'; e.textContent = '';
+    datos().then(function (d) {
+      return Cripto.abrir(d, codigo).then(function (s) { return { s: s, d: d }; });
+    }).then(function (x) {
+      if (!x.s) {
+        b.disabled = false; b.textContent = 'Entrar';
+        try { localStorage.removeItem('nm.codigo'); sessionStorage.removeItem('nm.codigo'); } catch (z) {}
+        if (!auto) error('código no válido'); else c.focus();
+        return;
+      }
+      try {
+        sessionStorage.setItem('nm.codigo', codigo);
+        if (recordar) localStorage.setItem('nm.codigo', codigo); else localStorage.removeItem('nm.codigo');
+      } catch (z) {}
+      var app = JSON.parse(x.s.fuente);
+      x.s.datos = x.d;
+      window.__NM = x.s;
+      window.__NM_DEF = app.def;
+      document.getElementById('estilo-acceso').remove();
+      var st = document.createElement('style'); st.textContent = app.css; document.head.appendChild(st);
+      document.body.innerHTML = app.html;
+      var sc = document.createElement('script'); sc.textContent = app.js; document.body.appendChild(sc);
+    }).catch(function (err) {
+      b.disabled = false; b.textContent = 'Entrar';
+      error('no se pudo cargar la web (' + err.message + ')');
+    });
+  }
+  f.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    if (!Cripto.normalizar(c.value)) { error('escribe tu código'); return; }
+    entrar(c.value.trim(), r.checked, false);
+  });
+  var guardado = null;
+  try { guardado = sessionStorage.getItem('nm.codigo') || localStorage.getItem('nm.codigo'); } catch (z) {}
+  if (guardado) entrar(guardado, !!localStorage.getItem('nm.codigo'), true); else c.focus();
+})();
+</script>
+</body>
+</html>
