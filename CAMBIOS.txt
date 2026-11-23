@@ -1,0 +1,1 @@
+v2 - Version Vercel con servidor y base de datos Upstash Redis
